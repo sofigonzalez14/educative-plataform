@@ -1,0 +1,303 @@
+// =====================================================================
+// ENUMS — conjuntos cerrados de valores (Postgres los crea como tipos)
+// =====================================================================
+generator client {
+  provider = "prisma-client"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+enum Rol {
+  ALUMNO
+  PROFESOR
+  ADMIN
+}
+
+enum RolDocente {
+  TITULAR
+  SUPLENTE
+}
+
+enum MetodoInscripcion {
+  CODIGO // el alumno se autoinscribió con el código de invitación
+  MANUAL // lo agregó el profesor por DNI o email
+}
+
+enum DiaSemana {
+  LUNES
+  MARTES
+  MIERCOLES
+  JUEVES
+  VIERNES
+  SABADO
+}
+
+enum EstadoAsistencia {
+  PRESENTE
+  AUSENTE
+}
+
+enum AutorMensaje {
+  ALUMNO
+  IA
+}
+
+enum PresetIA {
+  ESTRICTO
+  GUIADO
+  LIBRE_CON_LIMITES
+}
+
+enum NivelAyuda {
+  BAJO
+  MEDIO
+  ALTO
+}
+
+enum SenalamientoError {
+  ZONA // señala la línea/zona del error
+  SINTOMA // solo describe el síntoma
+}
+
+// =====================================================================
+// USUARIO / ALUMNO / PROFESOR (herencia 1:1)
+// =====================================================================
+
+model Usuario {
+  id_usuario    Int      @id @default(autoincrement())
+  email         String   @unique
+  password_hash String
+  rol           Rol
+  activo        Boolean  @default(true)
+  creado_en     DateTime @default(now())
+
+  alumno   Alumno?
+  profesor Profesor?
+
+  @@map("usuario")
+}
+
+model Alumno {
+  id_alumno        Int      @id @default(autoincrement())
+  dni              String   @unique
+  nombre           String
+  apellido         String
+  telefono         String?
+  fecha_nacimiento DateTime @db.Date
+  id_usuario       Int      @unique
+  usuario          Usuario  @relation(fields: [id_usuario], references: [id_usuario], onDelete: Cascade)
+
+  inscripciones Inscripcion[]
+  notas         Nota[]
+  entregas      Entrega[]
+  asistencias   Asistencia[]
+  chats         Chat[]
+
+  @@map("alumno")
+}
+
+model Profesor {
+  id_profesor Int     @id @default(autoincrement())
+  nombre      String
+  apellido    String
+  direccion   String?
+  cuil        String  @unique
+  telefono    String?
+  antiguedad  Int?
+  id_usuario  Int     @unique
+  usuario     Usuario @relation(fields: [id_usuario], references: [id_usuario], onDelete: Cascade)
+
+  tareas          Tarea[]
+  asignaciones    AsignacionDocente[]
+  configuraciones ConfiguracionIA[]
+
+  @@map("profesor")
+}
+
+// =====================================================================
+// MATERIA / MODULO (1 a N)
+// =====================================================================
+
+model Materia {
+  id_materia     Int    @id @default(autoincrement())
+  nombre         String
+  cod_invitacion String @unique
+
+  modulos         Modulo[]
+  tareas          Tarea[]
+  inscripciones   Inscripcion[]
+  asignaciones    AsignacionDocente[]
+  asistencias     Asistencia[]
+  chats           Chat[]
+  configuraciones ConfiguracionIA[]
+
+  @@map("materia")
+}
+
+// Un registro por bloque horario: si la materia se da lunes y jueves, son 2 módulos.
+model Modulo {
+  id_modulo   Int       @id @default(autoincrement())
+  dia         DiaSemana
+  hora_inicio String // formato "HH:MM"
+  hora_fin    String // formato "HH:MM"
+  id_materia  Int
+  materia     Materia   @relation(fields: [id_materia], references: [id_materia], onDelete: Cascade)
+
+  @@map("modulo")
+}
+
+// =====================================================================
+// N a M con tabla intermedia
+// =====================================================================
+
+model Inscripcion {
+  id_inscripcion Int               @id @default(autoincrement())
+  fecha_insc     DateTime          @default(now())
+  metodo         MetodoInscripcion
+  id_alumno      Int
+  alumno         Alumno            @relation(fields: [id_alumno], references: [id_alumno])
+  id_materia     Int
+  materia        Materia           @relation(fields: [id_materia], references: [id_materia])
+
+  @@unique([id_alumno, id_materia])
+  @@map("inscripcion")
+}
+
+model AsignacionDocente {
+  id_asignacion Int        @id @default(autoincrement())
+  rol           RolDocente
+  fecha_inicio  DateTime   @db.Date
+  fecha_fin     DateTime?  @db.Date // null = asignación vigente
+  id_profesor   Int
+  profesor      Profesor   @relation(fields: [id_profesor], references: [id_profesor])
+  id_materia    Int
+  materia       Materia    @relation(fields: [id_materia], references: [id_materia])
+
+  @@map("asignacion_docente")
+}
+
+// =====================================================================
+// TAREA y lo que cuelga de ella
+// =====================================================================
+
+model Tarea {
+  id_tarea          Int       @id @default(autoincrement())
+  titulo            String
+  consigna          String
+  requiere_entrega  Boolean   @default(true)
+  fecha_publicacion DateTime  @default(now())
+  fecha_limite      DateTime?
+  id_materia        Int
+  materia           Materia   @relation(fields: [id_materia], references: [id_materia])
+  id_profesor       Int
+  profesor          Profesor  @relation(fields: [id_profesor], references: [id_profesor])
+
+  notas           Nota[]
+  entregas        Entrega[]
+  chats           Chat[]
+  configuraciones ConfiguracionIA[]
+
+  @@map("tarea")
+}
+
+model Nota {
+  id_nota    Int      @id @default(autoincrement())
+  valor      Decimal? @db.Decimal(4, 2) // ej: 7.50 — sin errores de redondeo de Float
+  comentario String?
+  publica    Boolean  @default(false) // oculta por defecto
+  fecha      DateTime @default(now())
+  id_tarea   Int
+  tarea      Tarea    @relation(fields: [id_tarea], references: [id_tarea])
+  id_alumno  Int
+  alumno     Alumno   @relation(fields: [id_alumno], references: [id_alumno])
+
+  @@unique([id_tarea, id_alumno]) // una nota por alumno por tarea
+  @@map("nota")
+}
+
+// Al menos uno de archivo_url / texto / link debe venir: eso lo valida el backend.
+model Entrega {
+  id_entrega    Int      @id @default(autoincrement())
+  archivo_url   String?
+  texto         String?
+  link          String?
+  fecha_entrega DateTime @default(now())
+  id_tarea      Int
+  tarea         Tarea    @relation(fields: [id_tarea], references: [id_tarea])
+  id_alumno     Int
+  alumno        Alumno   @relation(fields: [id_alumno], references: [id_alumno])
+
+  @@unique([id_tarea, id_alumno]) // sin reintentos: una entrega por alumno por tarea
+  @@map("entrega")
+}
+
+// =====================================================================
+// ASISTENCIA (dos FK + fecha, clave compuesta)
+// =====================================================================
+
+model Asistencia {
+  id_asistencia Int              @id @default(autoincrement())
+  estado        EstadoAsistencia
+  fecha         DateTime         @db.Date // solo fecha, sin hora
+  id_alumno     Int
+  alumno        Alumno           @relation(fields: [id_alumno], references: [id_alumno])
+  id_materia    Int
+  materia       Materia          @relation(fields: [id_materia], references: [id_materia])
+
+  @@unique([id_alumno, id_materia, fecha])
+  @@map("asistencia")
+}
+
+// =====================================================================
+// CHAT / MENSAJE (chat híbrido: general o por tarea)
+// =====================================================================
+
+model Chat {
+  id_chat    Int      @id @default(autoincrement())
+  creado_en  DateTime @default(now())
+  id_alumno  Int
+  alumno     Alumno   @relation(fields: [id_alumno], references: [id_alumno])
+  id_materia Int
+  materia    Materia  @relation(fields: [id_materia], references: [id_materia])
+  id_tarea   Int? // null = chat general de la materia
+  tarea      Tarea?   @relation(fields: [id_tarea], references: [id_tarea])
+
+  mensajes Mensaje[]
+
+  @@map("chat")
+}
+
+model Mensaje {
+  id_mensaje Int          @id @default(autoincrement())
+  autor      AutorMensaje
+  contenido  String
+  fecha      DateTime     @default(now())
+  id_chat    Int
+  chat       Chat         @relation(fields: [id_chat], references: [id_chat], onDelete: Cascade)
+
+  @@map("mensaje")
+}
+
+// =====================================================================
+// CONFIGURACION IA (por materia, con override opcional por tarea)
+// =====================================================================
+
+model ConfiguracionIA {
+  id_configuracion          Int               @id @default(autoincrement())
+  preset                    PresetIA
+  nivel_ayuda               NivelAyuda
+  permite_codigo            Boolean           @default(false)
+  senala_error              SenalamientoError @default(SINTOMA)
+  permite_recursos_externos Boolean           @default(false)
+  limite_pistas             Int? // null = sin límite
+  id_materia                Int
+  materia                   Materia           @relation(fields: [id_materia], references: [id_materia])
+  id_tarea                  Int? // null = config general de la materia
+  tarea                     Tarea?            @relation(fields: [id_tarea], references: [id_tarea])
+  id_profesor               Int
+  profesor                  Profesor          @relation(fields: [id_profesor], references: [id_profesor])
+
+  @@map("configuracion_ia")
+}
